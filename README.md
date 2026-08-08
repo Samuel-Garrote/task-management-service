@@ -1,4 +1,62 @@
 # Task Management API
+## 🏛️ Distributed System Architecture
+
+```mermaid
+flowchart TD
+    %% Node Styles
+    classDef client fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff;
+    classDef service fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
+    classDef infra fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff;
+    classDef db fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
+
+    Client["📱 / 💻 Web / Mobile Client"]:::client
+
+    subgraph System ["Microservices Ecosystem"]
+        
+        subgraph Auth_MS ["1. Auth Microservice"]
+            AuthController["AuthController"]
+            AuthService["AuthService (JWT)"]
+            AuthDB[("Auth DB (Users)")]:::db
+            AuthController --> AuthService --> AuthDB
+        end
+
+        subgraph Core_MS ["2. Task Core Microservice"]
+            TaskController["TaskController"]
+            TaskService["TaskService (Hexagonal)"]
+            TaskProducer["KafkaTaskProducer"]
+            TaskDB[("Task DB (Tasks/Projects)")]:::db
+
+            TaskController --> TaskService
+            TaskService --> TaskDB
+            TaskService --> TaskProducer
+        end
+
+        subgraph Messaging ["Message Broker"]
+            KafkaBroker{{"Apache Kafka Topic: task-events"}}:::infra
+            KafkaDLQ{{"Kafka Topic: task-events.DLQ"}}:::infra
+        end
+
+        subgraph Worker_MS ["3. Notification / Worker Microservice"]
+            KafkaConsumer["KafkaTaskConsumer"]
+            IdempotencyCheck{"Idempotency Strategy<br/>(Deduplication)"}:::infra
+            ProcessService["Notification / Processing Service"]
+            WorkerDB[("Worker DB / Cache")]:::db
+
+            KafkaConsumer --> IdempotencyCheck
+            IdempotencyCheck -- "Duplicate Event" --> Skip["🛑 Ignore / Direct ACK"]
+            IdempotencyCheck -- "New Event" --> ProcessService
+            ProcessService --> WorkerDB
+        end
+
+    end
+
+    %% Communication Flows
+    Client -- "1. Login / Register" --> AuthController
+    Client -- "2. HTTP Request (Bearer JWT)" --> TaskController
+    TaskProducer -- "3. Publish TaskCreatedEvent" --> KafkaBroker
+    KafkaBroker -- "4. Consume Event (At-Least-Once)" --> KafkaConsumer
+    KafkaConsumer -- "5. Failure after N retries" --> KafkaDLQ
+```
 
 A RESTful task management API built with Spring Boot 4, following hexagonal architecture principles. Supports task and project management with JWT-based authentication and event-driven notifications via Apache Kafka.
 
