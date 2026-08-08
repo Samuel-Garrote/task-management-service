@@ -1,61 +1,90 @@
 # Task Management API
-## 🏛️ Distributed System Architecture
+## 🏛️ Task Managment API Architecture (Single Service / Hexagonal)
 
 ```mermaid
 flowchart TD
     %% Node Styles
     classDef client fill:#3b82f6,stroke:#1d4ed8,stroke-width:2px,color:#fff;
-    classDef service fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
-    classDef infra fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff;
-    classDef db fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
+    classDef adapter fill:#10b981,stroke:#047857,stroke-width:2px,color:#fff;
+    classDef domain fill:#f59e0b,stroke:#b45309,stroke-width:2px,color:#fff;
+    classDef infra fill:#8b5cf6,stroke:#6d28d9,stroke-width:2px,color:#fff;
 
-    Client["📱 / 💻 Web / Mobile Client"]:::client
+    Client["📱 / 💻 Web Client / Postman"]:::client
 
-    subgraph System ["Microservices Ecosystem"]
-        
-        subgraph Auth_MS ["1. Auth Microservice"]
-            AuthController["AuthController"]
-            AuthService["AuthService (JWT)"]
-            AuthDB[("Auth DB (Users)")]:::db
-            AuthController --> AuthService --> AuthDB
+    subgraph App ["TaskMaster API (Monolithic Hexagonal App)"]
+
+        subgraph Security ["Security & JWT (Vueltas 5+6)"]
+            SecurityConfig["SecurityConfig"]
+            JwtAuthFilter["JwtAuthFilter"]
+            AuthController["AuthController (/auth/login, /auth/register)"]
+            AuthService["AuthService"]
+            JwtService["JwtService"]
+            
+            SecurityConfig -. "Registers filter" .-> JwtAuthFilter
+            AuthController --> AuthService
+            AuthService --> JwtService
         end
 
-        subgraph Core_MS ["2. Task Core Microservice"]
-            TaskController["TaskController"]
-            TaskService["TaskService (Hexagonal)"]
-            TaskProducer["KafkaTaskProducer"]
-            TaskDB[("Task DB (Tasks/Projects)")]:::db
-
-            TaskController --> TaskService
-            TaskService --> TaskDB
-            TaskService --> TaskProducer
+        subgraph WebLayer ["Primary Adapters / Drivers"]
+            TaskController["TaskController (5 Endpoints) + @Valid"]:::adapter
+            GlobalHandler["GlobalExceptionHandler"]:::adapter
         end
 
-        subgraph Messaging ["Message Broker"]
-            KafkaBroker{{"Apache Kafka Topic: task-events"}}:::infra
-            KafkaDLQ{{"Kafka Topic: task-events.DLQ"}}:::infra
+        subgraph DomainLayer ["Domain & Application Core (Vueltas 1, 2, 3, 7)"]
+            UseCases["Input Ports<br/>(CreateTaskUseCase, FindTaskByIdUseCase...)"]:::domain
+            TaskService["TaskService (Core Logic)"]:::domain
+            DomainModels["Entities & Aggregates<br/>(Task, Project, User)"]:::domain
+            
+            UseCases --> TaskService
+            TaskService --> DomainModels
         end
 
-        subgraph Worker_MS ["3. Notification / Worker Microservice"]
-            KafkaConsumer["KafkaTaskConsumer"]
-            IdempotencyCheck{"Idempotency Strategy<br/>(Deduplication)"}:::infra
-            ProcessService["Notification / Processing Service"]
-            WorkerDB[("Worker DB / Cache")]:::db
+        subgraph OutAdapters ["Secondary Adapters / Driven"]
+            
+            subgraph Persistence ["Persistence Adapter"]
+                TaskRepoPort["TaskRepositoryPort / UserRepositoryPort"]:::adapter
+                TaskRepoAdapter["TaskRepositoryAdapter / UserRepositoryAdapter"]:::adapter
+                Mappers["Mappers (EntityMappers)"]:::adapter
+                JPARepos["JPA Repositories"]:::adapter
+                
+                TaskRepoPort --> TaskRepoAdapter
+                TaskRepoAdapter --> Mappers
+                TaskRepoAdapter --> JPARepos
+            end
 
-            KafkaConsumer --> IdempotencyCheck
-            IdempotencyCheck -- "Duplicate Event" --> Skip["🛑 Ignore / Direct ACK"]
-            IdempotencyCheck -- "New Event" --> ProcessService
-            ProcessService --> WorkerDB
+            subgraph Messaging ["Kafka Adapter (Vuelta 8)"]
+                TaskEventProducer["TaskEventProducer"]:::adapter
+                TaskEventConsumer["TaskEventConsumer (@KafkaListener)"]:::adapter
+                KafkaErrorConfig["KafkaErrorConfig (DefaultErrorHandler)"]:::adapter
+            end
+
+        end
+
+        subgraph TestingSuite ["Testing Suite (Vuelta 9)"]
+            UnitTests["TaskServiceTest (Mockito - 7 tests)"]
+            WebTests["TaskControllerTest (@WebMvcTest - 2 tests)"]
         end
 
     end
 
-    %% Communication Flows
-    Client -- "1. Login / Register" --> AuthController
-    Client -- "2. HTTP Request (Bearer JWT)" --> TaskController
-    TaskProducer -- "3. Publish TaskCreatedEvent" --> KafkaBroker
-    KafkaBroker -- "4. Consume Event (At-Least-Once)" --> KafkaConsumer
-    KafkaConsumer -- "5. Failure after N retries" --> KafkaDLQ
+    subgraph External ["External Infrastructure"]
+        DB[("Database (JPA)")]:::infra
+        KafkaBroker{{"Apache Kafka Topic: task-events"}}:::infra
+        KafkaDLQ{{"Kafka Topic: DLQ"}}:::infra
+    end
+
+    %% Flow Connections (Runtime)
+    Client -- "1. HTTP Request (JWT Bearer)" --> JwtAuthFilter
+    JwtAuthFilter -- "2. Authenticated" --> TaskController
+    TaskController -- "3. DTO" --> UseCases
+    TaskService -- "4. Save Task" --> TaskRepoPort
+    JPARepos -- "5. Persist" --> DB
+    
+    TaskService -- "6. Emit Event" --> TaskEventProducer
+    TaskEventProducer -- "7. Publish TaskCreatedEvent" --> KafkaBroker
+    KafkaBroker -- "8. Consume Event" --> TaskEventConsumer
+    TaskEventConsumer -- "9. If fails N times" --> KafkaErrorConfig
+    KafkaErrorConfig -- "10. Route to DLQ" --> KafkaDLQ
 ```
 
 A RESTful task management API built with Spring Boot 4, following hexagonal architecture principles. Supports task and project management with JWT-based authentication and event-driven notifications via Apache Kafka.
