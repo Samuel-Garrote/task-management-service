@@ -62,7 +62,7 @@ The API will be available at `http://localhost:8080`.
 
 ## Live Demo
 
-Deployed on AWS EC2 (Docker container). Live URL available on request.
+Deployed on AWS EC2 using Docker. All `/tasks/**` endpoints require JWT authentication.
 
 > Note: uses an in-memory H2 database, so data resets on container restart.
 
